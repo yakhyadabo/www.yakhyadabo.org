@@ -1,0 +1,305 @@
++++
+title = "Small additionnal precisions on the Dockerfile"
+description = ""
+tags = [
+    "docker",
+    "linux",
+    "devops",
+    "development",
+]
+date = "2016-04-02"
+categories = [
+    "Development",
+    "DevOps",
+    "index",
+]
++++
+// == *Petite precision sur le Dockerfile*
+== *Small additionnal precisions on the Dockerfile*
+
+//Precedemment, dans la presentation de Docker et de la technologie des conteneurs, on avait parle des features sur lesquels reposent Docker. Le *Cgroup* et le *Namespaces* pour l'isolation de processus, et le systeme de fichier *COW* pour l'optimisation de l'espace disque. Dans cet article on passera le Dockerfile a la loupe, le fichier de description d'une image et d'un conteneur Docker. Meme si le nombre de commandes est reduit, leur subtilite n apparait pas a la premiere utilisation. Le site officiel demeure le meilleur source de documentation. On ne s'attardera que sur les commandes de base - *ADD*, *COPY*, *CMD* et *ENTRYPOINT*. 
+
+Previously , in the presentation of Docker and container technology , we were talking about the features on which Docker is based upon. The *CGroup* and *Namespaces* for process isolation, and *COW* file system to optimize disk space. In this article we will scrutinise the Dockerfile, the description file of an image and a Docker container. Even if the number of commands is limited, their subtlety may not appear at the first use. The official website is the best source of documentation. Here we will focus only on the basic commands - *ADD* , *COPY*, *CMD* and *ENTRYPOINT* .
+
+
+****
+//Les exemples ont ete utilises avec la version 1.11 de Docker. Des mises a jours seront eventuellements apportees si necessaires. 
+The examples have been used with version 1.11 of Docker. Changes will be made where necessary. 
+****
+
+// === *Comprendre les layers :*
+=== *Undestanding layers :*
+
+// Dans le Dockerfile chaque commande (ADD, COPY, ENTRYPOINT, CMD, …) fait l'objet d'ajout d'une nouvelle couche (COW) a l'image.  Et les couches, moins on en a mieux c'est pour la taille des images. Sachant qu'en plus, le nombre de couches a une limite (42 avant, et 127 depuis recemment). Meme si la contraine du nombre de lignes (ou couches) est quasiment ecartee (si vous avez un Dockerfile avec 127 lignes il y a un vrai probleme), regrouper les commandes facilte la comprehension du Dockerfile. 
+
+Each command of the Dockerfile (ADD , COPY , ENTRYPOINT , CMD , ...) adds a new layer (COW) to the image. And the less we have layer the better it is for the image size. Considering that, the number of layers has a limit (it used to be 42 and since recently it's 127). Even if the limiting factor of the number of rows (or layers) is almost no longer present ( if you have a Dockerfile with 127 lines there is a real problem ), combining commands facilitate the understanding of the Dockerfile .
+
+// Tip : Regrouper les commandes autant que possibles 
+Tip: Combine commands as far as possible
+
+//.Dockerfile (avec 4 couches)
+.Dockerfile (with 4 layers)
+====
+[source,shell]
+----
+RUN curl -fsSL http://archive.apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz // <1>
+RUN tar xzf apache-maven-$MAVEN_VERSION-bin.tar.gz  - -C /usr/share //<2>
+RUN mv /usr/share/apache-maven-$MAVEN_VERSION /usr/share/maven //<3>
+RUN ln -s /usr/share/maven/bin/mvn /usr/bin/mvn //<4>
+----
+====
+
+."Refactored" Dockerfile in only one command
+====
+[source,shell]
+----
+RUN curl -fsSL http://archive.apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz | tar xzf - -C /usr/share \ 
+  && mv /usr/share/apache-maven-$MAVEN_VERSION /usr/share/maven \ 
+  && ln -s /usr/share/maven/bin/mvn /usr/bin/mvn //<1> 
+----
+====
+
+// On reduit le nombre de couches a une et on a gagne en lisibilite. 
+The number of layers is reduced to one and we have gained more readability.
+
+//=== *Le cache*
+=== *The cache*
+
+// Toutes les couches d'une image sont mises dans le cache.  Quand on lance le build d'une image Docker commence d'abord par chercher dans le cache des couches qu'il pourrait reutiliser pour optimiser le temps de construction de l'image en evitant les telechargement inutiles. De ce fait, en cas de modification, seules les lignes concernees par la modification seront rexecutees. 
+
+All the layers of an image are cached. When launching the build of an image, Docker starts first by checking in the cache layers that could be reuse, in order to optimize the build time of the image, by avoiding unnecessary downloads. Therefore, in case of any modification, only the lines that are affected by the changes will be reinterpreted .
+
+====
+[source,shell]
+----
+FROM java:openjdk-8-jdk  //<1>
+MAINTAINER Yakhya DABO  //<2>
+ENV MAVEN_VERSION 3.3.3  //<3>
+ENV PROJECT_DIR /usr/src/app  //<4>
+ENV M2_HOME /usr/share/maven  //<5>
+...
+
+... 	
+RUN mkdir -p $PROJECT_DIR //<8>
+COPY config/settings.xml $M2_HOME/conf/ //<9>
+RUN curl -fsSL http://archive.apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz | tar xzf - -C /usr/share \
+&& mv /usr/share/apache-maven-$MAVEN_VERSION /usr/share/maven \ 
+&& ln -s /usr/share/maven/bin/mvn /usr/bin/mvn  //<10>
+VOLUME $PROJECT_DIR  //<11>
+WORKDIR $PROJECT_DIR  //<12>                      
+----
+====
+
+// Si on apporte une modification sur la ligne 9, le cache invalide toutes ses filles, les lignes 10, 11, ... qui seront reexecutees. Les lignes 1,2, … 8 n'etant pas des filles de 9 ne seront pas concernees par les modifications, c'est le cache qui sera utilise. 
+
+If we make a change on the line 9, the cache will invalidate all its descendants, lines 10, 11 and 12 which will be replayed. Lines 1,2 ... 8 not being descendants of line 9 will not be affected by the changes, the cache will be used . 
+
+//*Deux astuces pour bien profiter du cache :*  
+*Two tips to make the most of the cache :*
+
+//1. Placer le plus bas possible les lignes qui changent souvent (ajout d'un jar par exemple, COPY).
+1. Place the lowest possible lines that often change (Adding a jar for example with COPY/ADD)
+// 2. Mettre les operations couteuses (telechargement par exemple, RUN curl) le plus haut possible dans le Dockerfile pour eviter de les reexecuter a chaque  modification. 
+2. Put expensive operations (downloading for example with RUN curl ) as high as possible in the Dockerfile id order to avoid them being replayed for any change. 
+
+// === *Commandes ADD et COPY*
+=== *ADD and COPY commands*
+
+// oCes deux commandes sont facilement sujet a confusion, de par leur nom mais aussi de par leur syntaxe elle semblent faire la meme chose, sauf que dans la pratique ce n'est pas tout le temps le cas. 
+
+These two commands are easily subject to confusion. By their names and by their syntax they seem to do the same thing, except that in practice this is not always the case.
+
+[source,shell]
+----
+ ADD	src	dest
+ COPY	src	dest
+----
+
+// *src :*  un repertoire (ou fichier) du host
+*src :*  a folder (or a file) of the host
+// *dest :* un repertoire (ou fichier) du conteneur
+*dest :*  a folder (or a file) of the container
+
+// Une petite precision : Dans la commande “docker build” on specifie le context du Dockerfile.
+Small point: In the "docker build" command we specify the context of the Dockerfile
+
+[source,shell]
+----
+ $ docker build -f dockerfileDir contextDir
+----
+or
+[source,shell]
+----
+ $ docker build contextDir  // (if contextDir = buildDir)
+----
+*src* is relative to contextDir.
+
+// *dest* est soit un nom de fichier (/var/opt/fileName) soit un repertoire (/var/opt/).
+*dest* is either a filename (/var/opt/fileName) or a folder's name (/var/opt/).
+
+// *COPY* se contente tout simplement de prendre un fichier (ou repertoire) du host et de le mettre dans le conteneur. 
+*COPY* just simply copies a file (or directory ) from the host and put it in the container.
+
+// *ADD* peut aussi faire la meme chose, mais le *_src_* peut etre une URL, dans ce cas docker se charge du telechargement et de placer le fichier telecharge dans *_dest_*. Si *_src_* est un fichier zippe et *_dest_* un repertoire docker dezzipe *_src_* (ADD file.zip   /var/opt/ ). Un peu confus tout ca ... 
+
+*ADD* can also do the same thing, but here *_src_* can be an URL, in which case Docker will download the file under *_dest_*. If *_src_* is an archived file and *_dest_* a folder Docker will extract *_src_* under *_dest_* (ADD file.zip   /var/opt/ ). All of this is very confusing ...
+
+// La documentation de Docker conseille d'utiliser COPY au profit de ADD, sauf pour des cas specifiques. Mais pour quelqu'un qui a un peu beigne dans la philosophie Unix (faire une et une seule chose) ou le principe SRP on voit que ADD c'est du legacy, donc inutile. Mieux vaut ne pas l'avoir dans son Dockerfile. 
+
+The Docker documentation recommends using COPY in favor of ADD, except for specific cases. But if you have immersed in the Unix philosophy (Do one and only one thing) or the SRP principles you will see that ADD is a legacy , therefore it's useless. It's better not to have it in your Dockerfile .
+
+// On peut se contener de *_COPY_* pour les operations simples de copie du host vers le conteneur, et de coupler *_RUN_* avec les utilitaires existants tels que *tar*, *unzip*, *wget*, *curl*, … si on a besoin de zipper ou de telecharger des fichiers. 
+
+It is sufficient to use *_COPY_* for simple copy operations, from the host to the container, and *_RUN_* with existing tools such as *tar*, *unzip*, *wget*, *curl*, … if we want to archive or download files.
+
+// === *Commandes CMD et ENTRYPOINT*
+=== *CMD and ENTRYPOINT commands *
+
+// Dans la pratique les deux commandes peuvent avoir le meme resultat; executer le script de demarrage du conteneur. Mais d'apres la doc, https://docs.docker.com/v1.8/reference/builder/#entrypoint[Entrypoint] sert a configurer un container au demarrage, et https://docs.docker.com/v1.8/reference/builder/#cmd[CMD] est utilise pour definir la commande de demarrage par defaut du conteneur. 
+
+In practice these two commands can have the same result ; to execute the startup script of the container. But according to the documentation, https://docs.docker.com/v1.8/reference/builder/#entrypoint[Entrypoint] is used to configure a container at startup, while https://docs.docker.com/v1.8/reference/builder/#cmd[CMD] is used to provide the default startup command to the container. 
+
+// .Utilisation de CMD
+.Usage of CMD
+====
+[source,shell]
+----
+FROM maven:3.3.3-jdk-8 
+WORKDIR projectDir 
+... 
+CMD ["mvn clean install”]
+----
+====
+
+[source,shell]
+----
+$ docker run my_maven_image va executer mvn clean install
+----
+
+// … et si on veut surcharger cette commande ...
+if we want to override the commad
+
+[source,shell]
+----
+$ docker run my_maven_image mvn clean verify
+----
+
+.Utilisation de ENTRYPOINT
+.Usage of ENTRYPOINT
+====
+// Pour mon conteneur git j'aurais besoin des parametres du committeur (user.name et user.email), au moment de lancer le container. Je peux donc utiliser un entrypoint pour fixer ces deux parametres. 
+For my git container I will need the parameters of the commiter (user.name and user.email) at the starup of the container. I can therefore use ENTRYPOINT to set these arguments. 
+
+====
+
+[source,shell]
+----
+FROM git:2.0
+….
+COPY entrypoint.sh /var/lib
+ENTRYPOINT [“/var/lib/entrypoint.sh”]
+----
+
+[source,shell]
+----
+$ docker run -e GIT_USER_NAME=username -e GIT_USER_EMAIL=email my_git_image git commit -m “xxxxx”
+----
+
+// Le contenu de mon fichier entrypoint.sh :
+The content of my ENTRYPOINT
+
+[source,shell]
+----
+ #!/bin/bash 
+
+ set -e 
+
+ git config user.name "$GIT_USER_NAME" 
+ git config user.email "$GIT_USER_EMAIL" 
+
+ exec "$@"
+----
+
+// Il est important de noter que *ENTRYPOINT* utilise *CMD* comme argument ("$@"). Sa valeur par defaut est *_/bin/sh -c_*, qui prend en parametre une commande. Ce qui fait que quand on ne definie pas notre propre *ENTRYPOINT* (dans le Dockerfile ou en parametre a docker run avec –entrypoint) *CMD* devient la commande a executer (eventuellement avec ses parametres). 
+It's important to note that *ENTRYPOINT* use *CMD* as its argument ("$@"). It's default value is *_/bin/sh -c_*, which has a command as a paramter. So, when we don't define any *ENTRYPOINT* (in the Dockerfile or as a parameter of docker run with --entrypoint) *CMD* becomes the command to run (possibly with its parameters).
+
+//.Avec New Relic
+.With New Relic
+====
+// J'utilise New Relic en Prod pour le monitoring de la JVM de mon conteneur. Mais je veux aussi avoir le choix de m' en passer quand j'en ai pas besoin, en Dev par exemple. 
+I use New Relic in Production to monitor the JVM of my container. But I also want to have the option to do without it, in Dev envrionment for example. 
+
+====
+
+// - La solution la plus simple pourrait etre d'avoir deux images differentes, une pour la Prod, avec New Relic, et la seconde pour le Dev, sans New Relic. Mais cette option ne respecte pas les principes du Continuous Delivery, _“le livrable doit etre le meme dans tous les envs”_. 
+ - The simplest solution is to have two different images, one for Production, with New Relic, and the second for Dev, without New Relic. But this option does not meet the principles of Continuous Delivery, _"The artifact should remain the same in all environments".
+
+// - Une deuxieme solution, celle que je prefere, sera d'utiliser ENTRYPOINT pour decider de lancer ou non New Relic selon que les variables *NEWRELIC_KEY* et *NEWRELIC_APP_NAME* sont specifiees ou non. 
+ - A second solution, which is my favorite, would be to use ENTRYPOINT in deciding whether or not to run New Relic, depending on whether or not *NEWRELIC_KEY* and *NEWRELIC_APP_NAME* environment variables are set.
+
+// Pour lancer le container en Prod : 
+To launch the container in Production : 
+
+[source,shell]
+----
+ $ docker run -e  NEWRELIC_KEY=XXXXXXXX -e  NEWRELIC_APP_NAME=my_app_name my_service_image 
+----
+… and in Dev : 
+
+[source,shell]
+----
+ $ docker run -e my_service_image 
+----
+
+// Dans mon ENTRYPOINT je peux avoir le script d'initialisation de l'environement d'execution,  pour positionner les parametres des fichiers de config avec les variables d'environements passees en parametres (nom, cle, url, mot de passe, login, ...) et CMD pour specifier la commande a exectuter apres l'initialisation de l'environement.
+In my ENTRYPOINT I can have the init script of the execution environment, to set the parameters of config files with environment variables given as parameters (name, key, url, password, login, ...) and use CMD to specify the command to execute after initialising the environment. 
+
+
+[source,shell]
+----
+Dockerfile
+….
+ENTRYPOINT [“entrypoint.sh”]
+CMD ["java","-javaagent:/opt/newrelic/newrelic.jar","-jar","app.jar"]
+----
+
+entrypoint.sh
+
+[source,shell]
+----
+#!/bin/sh 
+
+set -e 
+
+
+if [ -z "$NEWRELIC_KEY" ]; then 
+        java -Djava.security.egd=file:/dev/./urandom -jar app.jar 
+else 
+        if [ -z "$NEWRELIC_APP_NAME" ]; then 
+                echo >&2 'error: missing required environment variable' 
+                echo >&2 'error: NEWRELIC_APP_NAME must be set when using New Relic' 
+                exit 1 
+        fi 
+
+        NEW_RELIC_CONFIG_FILE=$NEW_RELIC_DIR/newrelic.yml 
+        cp $NEW_RELIC_CONFIG_FILE $NEW_RELIC_CONFIG_FILE.original 
+
+        # Override key and app_name 
+        sed -i -e "s/app_name:\ My\ Application/app_name:\ ${NEWRELIC_APP_NAME}/g" $NEW_RELIC_CONFIG_FILE 
+        sed -i -e "s/'<\%= license_key \%>'/${NEWRELIC_KEY}/g" $NEW_RELIC_CONFIG_FILE 
+
+        exec "$@" 
+fi
+----
+
+// === *Ce qu'il faut retenir ...*
+=== *The key point ...*
+
+// Comprendre le fonctionnement du cache est important pour reduire le temps de build des images, une contrainte essentielle pour faire du Continuous Delivery. 
+It's very important to undestand how the cache works in order to reduce the build time of the images, which is an essential constraint in Continuous Delivery. 
+
+// Toujours utiliser la commande *COPY* a la place de *ADD*.
+*COPY* command should always be used in favor of *ADD*.
+
+// Se limiter a *CMD* pour les commandes simples, sans besoin de configuration du conteneur. Et utiliser *ENTRYPOINT* + *CMD* quand on a besoin d'appliquer des configurations au conteneur avant de le lancer.  
+Limit yourself to *CMD* for simple commands, with no need of any configuration from the container, and use *ENTRYPOINT* + *CMD* when you need to apply configurations to the container before launching it.

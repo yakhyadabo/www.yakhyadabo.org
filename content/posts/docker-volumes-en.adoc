@@ -1,0 +1,195 @@
++++
+title = "Storage with Docker volumes"
+description = ""
+tags = [
+    "docker",
+    "linux",
+    "devops",
+    "development",
+]
+date = "2016-04-02"
+categories = [
+    "Development",
+    "DevOps",
+    "index",
+]
++++
+//== *Les volumes Docker*
+== *Storage with Docker Volumes*
+
+//Entre la suppression et la creation d'un conteneur (avec docker rm) les donnees ne sont pas persistees. Un conteneur Docker est immutable. Son systeme de fichier *OverlayFS* est de type *COW*, il est en lecture seule. C'est cette immutabiltie qui permet a Docker d'assurer la portabilite de ses conteneurs. 
+Between the removal and the creation of a container (with _docker rm_ command) no data is saved. In Docker, containers are immutable. It has *COW* based file system, *OverlayFS*, which is in Read Only mode.  
+
+//Mais dans la pratique on a toujours besoin de garder des etats dans une application, a travers une base de donnees ou de simples fichiers. Docker dispose de trois features (*Data Volume*, *Data Container* et *Named Volume*) pour repondre a ce besoin. Le principe est de monter dans un conteneur des fichiers du host (ou d'un autre conteneur) de sorte a ce que ces fichiers subsistent a la suppression du conteneur.  
+
+But in practice we have always the need to keep some states in an application, through a database or simples flat files. Docker provides three features (*Data Volume*, *Data Container* and *Named Volume*) to satisfy this requirement. The idea is to mount in the container files from the host (or from another container) so that the files remain after the removal of the container.
+
+[.text-center]
+image::/images/storage.jpg[]
+
+// === *Le Data Volume*
+=== *The Data Volume*
+// Le principe du DV est de monter un repertoire du host dans le conteneur. Il peut etre cree de deux maniers : 
+The idea is to mount a host directory in the container. It can be done by following either of the steps below  : 
+
+// 1. Dans le Dockerfile avec la commande _VOLUME [“containerDir”]_ :  On cree un point de montage pour recevoir eventuellement un repertoire du host.
+1. In the Dockerfile with _VOLUME [“containerDir”]_ command : We define the container directoy where the host directory will be mounted.
+
+// 2. Specifier le volume au demarre du conteneur : Avec _docker run -v hostDir:containerDir_ on cree un volume dans le container et on monte un repertoire du host dans le volume. Si *hostDir* n'existe pas Docker le cree avec le _User_ root.
+2. Specify the volume as we start the container : The _docker run -v hostDir:containerDir_ command creates a volume in the container and mount host direcotry in the volume. If the *hostDir* does not exist Docker will create it with the root _User_.
+
+.Postgres
+====
+[source,shell]
+----
+$ docker run -v /var/data/:/etc/postgresql postgres
+----
+====
+
+// La principale limitation d'avoir un volume sur le host est de perdre en portabilite. Il faut s'assurer d'avoir des droits d'ecriture/lecture sur tous les hosts ou l'on va executer le conteneur.
+The main limitation of mounting a host folder is the risk of loing portability. You should ensure that the access rights (read/write) are the same on all hosts, as well as the filesystem. 
+
+// === *Le Data Volume Container* (ou Data Only Container)
+=== *The Data Volume Container* (or Data Only Container)
+// Pour pallier l'insuffisance des data volumes, notamment sur la portabilite,  Docker standardise le *Data Valome Container*. Les donnees, au lieu d'etre persistees sur le host, vont etre stockees sur un autre container qu'on evitera de supprimer. On aura l'attribut _–volume-from_ a la place de _-v_.  
+To address the limitiation of data volumes, namely regarding portability, Docker standardised the *Data Valome Container*. The data will be saved in a container, instead of the host, and that the need to delete it would thereby be averted. The _-v_ attribut will be replaced by _–volume-from_.  
+
+.Dockerfile of the DVC 
+====
+[source,shell]
+----
+  FROM alpine:latest
+  RUN mkdir dataDir
+  VOLUME dataDir
+----
+====
+
+ 
+// Le DVC declare des volumes qu'il mettra a la disposition d'autres conteneurs. On lance le Data Container qu'une seule fois, avec _docker create data-volume-name_ (ou avec _docker run -name data-volume-name ... true_,  avec l'option *true* il s'arrete immediatement apres sa creation). 
+The DVC declares volumes and makes them available to other containers. The container is created using the command _docker create data-volume-name_ (or by _docker run -name data-volume-name ... true_,  the *true* option tells Docker to create the container and to stop it just after). 
+
+.Creation of the DVC 
+====
+[source,shell]
+----
+$ docker create -name data-volume-name ubuntu
+----
+====
+
+.Mounting the DVC 
+====
+[source,shell]
+----
+$ docker run -name my-container-name –volumes-from data-volume-name postgres
+----
+====
+// Cette solution semble geniale jusqu'a ce qu'on l'essaye une premiere fois et qu'on se heurte aux contraintes du *User Namespaces*. Le _User_ du container qui monte le volume a t il des droits suffisants pour ecrire dans le DVC ? Existe-il meme dans le DVC ? Pour resoudre le probleme il faut donc etre sur d'avoir le meme _User_ present sur les deux containers. 
+This solution may sound great, until the first time we use it and face *User Namespaces* constraints. The _User_ in the container that use volume may not have enough rights in the DVC. It even may not exist in the DVC. To solve this problem we must ensure that the same _User_ exists in both containers. 
+
+// ` *Sol 1 :* Creer deux users avec les memes Id dans les deux images. 
+*Sol 1 :* Create two users with the same ID in each of the two images. 
+
+// ` *Sol 2 :* Avoir une image unique pour les deux containers qui cree le _User_. Cette option a egalement l'avantage de profiter de l'optimisation d'espace disk/memoire offert par le COW  (comme on l'avait annonce, lancer plusieurs containers a partir d'une meme image ne coute rien).
+
+*Sol 2 :* Use the same image (with a _User_) for the two containers. One of the benefits of sharing image is the disk space optimisation provided by the COW File System (As mentionned previously, running multiple containers from an image should not have impact on the disk space).
+
+// *Exemple avec Maven :* J'ai un conteneur pour faire le build avec Maven, et un autre pour persister le repository Maven, de sorte a ce que je n'ai pas tout le temps a telecharger mes dependances. 
+
+Example with Maven :
+  
+----
+I have a container I use to build my project with Maven, and another container to persist the Maven repository, so that there will be no need to download dependencies for each build.
+----
+
+.Create DVC from maven image
+====
+[source,shell]
+----
+$ docker create --name maven_local_repository maven:3.3.3-jdk-8 
+----
+====
+
+.Run build container from maven image
+====
+[source,shell]
+----
+$ docker run -v my_project_dir:/usr/src/app \ 
+		--volumes-from maven_local_repository \ 
+		maven:3.3.3-jdk-8 mvn clean install
+----
+====
+
+// https://getcarina.com/docs/tutorials/data-volume-containers/
+
+=== *The Named volumes*
+
+// Les deux patterns qu'on vient de voir (Data Volume et DCV) ressemlent plus a des hacks. Le premier ecrit sur le host et le second  dans un conteneur dormant. En plus aucun des deux n'est accessible a travers le reseau, leur utilisation pour faire de la persistance n'est valable qu'au sein d'un host. 
+Both patterns we just saw (Data Volume and DVC) ressemlent look a lot more like hacks . The first writes on the host and the second in a dormant container. In addition neither one of them is accessible through the network, their use for persistence is valid only within a host. 
+
+// Dans la pratique les donnees d'une application doivent pouvoir etre deplacees, sauvegardees regulierement et restaurees sur un ou plusieurs hosts. C'est une des raisons qui expliquent le retard de l'adoption de Docker (en Prod precisement) pour les bases de donnees. 
+
+In practice, the data of an application must be able to be regularly moved, backed up and restored on one or more hosts. This is one of the reasons behind the delay in the adoption of Docker (Prod by precisely ) for databases.
+
+// Les Named Volumes sont aparus avec la release 1.8, a travers l'API Volumes, pour repondre a un besoin d'harmoniser l'utilisation des volumes et d'ajouter un peu plus de flexibilite. 
+With release 1.8 appeared the Named Volumes, through the Volumes API, to meet the need of harmonising the use of volumes and to add more flexibility.
+
+// et conseille de ne plus utiliser le DCV. 
+
+// La creation d'un Named Volume est simple :
+.Creation of a named volume
+====
+[source,shell]
+----
+$ docker volume create --name maven-repo-volume
+----
+====
+
+// Et pour l'utiliser : 
+.Mounting named volume
+====
+[source,shell]
+----
+$ docker run --rm  -v maven-repo-volume:/root/.m2/ maven:3.3.3-jdk-8 mvn clean install
+----
+====
+
+// $ docker run --rm  -v maven-repo-volume:/etc/maven/repository/ maven:3.3.3-jdk-8 mvn clean install
+ 
+// On utilise l'option *-v* (ou _--volume_ au lieu de _–volumes-from_)  
+We use *-v* option (or _--volume_) instead of _–volumes-from_.
+
+// *Shared volume* (Convoy et Flocker)
+*Shared volume* (Convoy and Flocker)
+
+//Les _named volumes_ existent par defaut au niveau local. Mais il peuvent etre partages quand on les configure avec un driver dedie.  C'est depuis la https://github.com/docker/docker/pull/14659[versions 1.8] que Docker supporte les volumes drivers. Vous auriez probablement le choix entre les deux implementations les plus populaires, http://rancher.com/introducing-convoy-a-docker-volume-driver-for-backup-and-recovery-of-persistent-data/[*Convoy*] de Rancher Labs et https://clusterhq.com/flocker/introduction/[*Flocker*] de ClusterHQ. 
+By default _Named volumes_ will be available only on local host, but can be shared throught the network when configured with a dedicated driver. Docker supports volumes drivers since https://github.com/docker/docker/pull/14659[versions 1.8]. And you will likely have to choose between the two most known implementations, http://rancher.com/introducing-convoy-a-docker-volume-driver-for-backup-and-recovery-of-persistent-data/[*Convoy*] from Rancher Labs and https://clusterhq.com/flocker/introduction/[*Flocker*] from ClusterHQ. 
+
+// Leur principe de fonctionnement est le suivant : On cree un volume, on fait des snapshots de ce volume et on les sauvegarde quelque part sur le cloud (AWS par exemple) de sorte a pouvoir les restaurer sur n'importe quelle machine. De ce fait ecrire sur le volume revient a ecrire sur le cloud 
+They function in the following way : We create a volume, make snapshots from the volume and save them somewhere in the cloud (AWS for example) so that the volume can be restored in any host. Therefore writing in the volume is like writing in the cloud.
+
+.with Flocker
+====
+[source,shell]
+----
+$ docker volume create -d flocker --name my-named-volume -o size=20GB 
+----
+====
+
+// On peut specifier comme parametres : 
+//  - AWS
+//  - ...
+
+// === *Pour terminer ...*
+=== *The key point ...*
+
+// Les volumes peuvent etre utiles dans plusieurs cas d'utilistion. Pour persister un repository Maven, sauvegarder des fichiers de logs ou gerer des variables d'environement. Dans la plus part des cas un *_Named volume_* fera l'affaire, pour les base de donnees par exemple ou le cas du repo Maven. Le *_Data Volume_* peut etre une solution dans le cas ou les donnees de parametrage d'un conteneur, les variables d'environement par exemple, sont fournies par le host.
+
+Volumes can be useful in several use cases, for persisting a Maven repository , saving log files or managing of environment variables. In many cases, such as Database or Maven repo, a *_Named volume_*  will do the job. The *_DATA Volume_* may be a solution in the cases where the container's parameter data, environment variables for example, are provided by the host.
+
+// Apres plusieurs utilisations de volumes on va inevitablement etre confronte a la problematiques des dangling volumes, des volumes fantomes, qui trainent sur le host sans etre attaches a aucun conteneur. Ils peuvent impacte l'espace disque.  Mais le risque majeur auquel on peut etre expose c'est la corruption de donnees, quand plusieurs conteneurs partagent le meme volume.  
+After a long period of use of volumes you will inevitably face the issue of dangling volumes, ghosts volumes lurking on the host without being tied to any container. They can impact disk space. This issue can be solved by removing volumes, docker-compose down -v or docker volume rm <volume name>. But the major risk that you can be exposed is data corruption, it can happen when several containers share the same volume.
+
+// De mon avis Docker a encore du chemin a faire pour arriver au niveau des technos de persistence traditionnelles. 
+Docker definitely has a long way to go to reach the level of traditional persistance technologies. 
+
+// vim: set syntax=asciidoc:

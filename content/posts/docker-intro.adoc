@@ -26,7 +26,7 @@ The success of Docker is linked to the fact that it provides a new way of isolat
 Containerisation is not only for isolating processes in the same host, it also provides the possibility to manage a whole data-centre as a single host.
 
 === *Architecture of Docker*
-
+image::/images/docker-architecture-techtip39.png[]
 [.text-justify]
 It's a simple client server architecture. For the common use cases the client receives a command from the user and forwards it to the daemon through a socket. But Docker also exposes REST API which can be used to achieve the same purpose.
 
