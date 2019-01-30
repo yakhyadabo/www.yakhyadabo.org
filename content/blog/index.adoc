@@ -1,0 +1,12 @@
++++
+title = "Blog"
+description = ""
+tags = [
+    "blog",
+]
+categories = [
+    "Blog",
+]
++++
+
+Coming soon ...

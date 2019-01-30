@@ -64,19 +64,19 @@ disqusShortname = "yourdiscussshortname"
 name = "About"
 weight = 1
 #url = "/about/"
-url = "/"
+url = "/about"
 
 [[menu.main]]
 name = "Blog"
 weight = 2
 # url = "/posts/"
-url = "/"
+url = "/blog"
 
 [[menu.main]]
 name = "Projects"
 weight = 3
 # url = "/projects/"
-url = "/"
+url = "/projects"
 
 [[menu.main]]
 name = "Contact me"
